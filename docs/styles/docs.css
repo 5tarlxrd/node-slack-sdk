@@ -81,6 +81,75 @@ summary > strong > i {
  * ☁️ Maybe one day, #page_contents will be able to go beyond a fixed width...
  */
 
+ /*
+ * Styles related to filter on Changelog page
+ */
+ .filter_btn {
+  margin: 4px;
+  border-radius: 0.25rem;
+  border: 1px solid #5992BE;
+  overflow: hidden;
+  float: left;
+  background-color: #fff;
+}
+
+.filter_name {
+  margin: 4px;
+  overflow: hidden;
+  float: left;
+  line-height: 1.5em;
+  height: 1.5em;
+}
+
+.filter_btn label {
+  cursor: pointer;
+  float: left; 
+  line-height: 1.5em;
+  height: 1.5em;
+  margin: 0
+}
+
+.filter_btn label span {
+  text-align: center;
+  display: block;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.filter_btn label input {
+  position: absolute;
+  display: none;
+  color: #fff !important;
+}
+
+.filter_btn label input + span {
+  color: #1D1C2D;
+  padding: 0 4px 0 4px;
+ }
+
+.filter_btn input:not(:checked) + span:hover {
+    background-color: #e8f5fa;
+    border-color: #dcf0fb;
+}
+
+.filter_btn input:checked + span {
+  cursor: pointer;
+  background-color: #5992BE;
+  border-color: #1264a3;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 0 rgba(0,0,0,.1)
+}
+
+.filter_container {
+  overflow: hidden;
+  display: block;
+}
+
+.pkg_hide, .ver_hide {
+  display: none;
+}
+
 /*
  * Github theme stylesheet from: http://jwarby.github.io/jekyll-pygments-themes/languages/javascript.html
  */

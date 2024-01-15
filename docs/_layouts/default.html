@@ -43,6 +43,10 @@ sidebar_style: main
                 <h1>{{ page.title }}</h1>
             {% endif %}
 
+            {% if page.title == "Changelog" %}
+                {% include changelog_filter.html %}
+            {% endif %}
+
             <div class="card auto_anchor_container">
                 {{ content }}
             </div>

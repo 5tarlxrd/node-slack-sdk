@@ -6,8 +6,29 @@ order: 10
 
 {% for release in site.github.releases %}
 
-<div>
-<h2 class="flat_grey" id="{{ release.name | slugify }}">{{ release.name }}</h2>
+{% if release.name != "" %}
+    {% assign name = release.name %}
+{% else %}
+    {% assign name = release.tag_name %}
+{% endif %}
+
+{% assign tmp_name = name | replace_first: "@" %} 
+{% if tmp_name contains "@" %}
+    {% assign name_parts = name | split: "@" %} 
+{% else %}
+    {% assign name_parts = name | split: "v" %}
+{% endif %}
+
+{% for el in name_parts %}
+    {% if el contains "slack" %}
+        {% assign package = el | slugify %}
+    {% else %}
+        {% assign version = el | replace_first: 'v', '' %}
+    {% endif %}
+{% endfor %}
+
+<div class="card changelog_item" data-ver="{{ version }}" data-pkg="{{ package }}">
+<h2 class="flat_grey" id="{{ name | slugify }}">{{ name }}</h2>
 <p>{{ release.published_at | date: "%b %-d, %Y" }}</p>
 
 <div class="release_notes">
