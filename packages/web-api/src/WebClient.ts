@@ -9,7 +9,7 @@ import { TextDecoder } from 'util';
 import isStream from 'is-stream';
 import pQueue from 'p-queue';
 import pRetry, { AbortError } from 'p-retry';
-import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import axios, { AxiosHeaderValue, AxiosInstance, AxiosResponse } from 'axios';
 // eslint-disable-next-line @typescript-eslint/naming-convention
 import FormData from 'form-data';
 import isElectron from 'is-electron';
@@ -22,20 +22,34 @@ import {
 } from './types/response';
 import { CursorPaginationEnabled } from './types/request/common';
 import { Methods } from './methods';
-import type { FilesUploadV2Arguments, FileUploadV2Job, FilesGetUploadURLExternalArguments, FilesCompleteUploadExternalArguments } from './types/request/files';
+import type {
+  FilesUploadV2Arguments,
+  FileUploadV2Job,
+  FilesGetUploadURLExternalArguments,
+  FilesCompleteUploadExternalArguments,
+} from './types/request/files';
 import { getUserAgent } from './instrument';
 import {
-  requestErrorWithOriginal, httpErrorFromResponse, platformErrorFromResult, rateLimitedErrorWithDelay,
+  requestErrorWithOriginal,
+  httpErrorFromResponse,
+  platformErrorFromResult,
+  rateLimitedErrorWithDelay,
 } from './errors';
 import { LogLevel, Logger, getLogger } from './logger';
 import { RetryOptions, tenRetriesInAboutThirtyMinutes } from './retry-policies';
 import delay from './helpers';
-import { warnIfNotUsingFilesUploadV2, getFileUploadJob, getMultipleFileUploadJobs, getAllFileUploadsToComplete } from './file-upload';
+import {
+  warnIfNotUsingFilesUploadV2,
+  getFileUploadJob,
+  getMultipleFileUploadJobs,
+  getAllFileUploadsToComplete,
+} from './file-upload';
 
 /*
  * Helpers
  */
-
+// Props on axios default headers object to ignore when retrieving full list of actual headers sent in any HTTP requests
+const axiosHeaderPropsToIgnore = ['delete', 'common', 'get', 'put', 'head', 'post', 'link', 'patch', 'purge', 'unlink', 'options'];
 const defaultFilename = 'Untitled';
 const defaultPageSize = 200;
 const noopPageReducer: PageReducer = () => undefined;
@@ -441,6 +455,9 @@ export class WebClient extends Methods {
         alt_text: upload.alt_text,
         snippet_type: upload.snippet_type,
       } as FilesGetUploadURLExternalArguments;
+      if ('token' in upload) {
+        options.token = upload.token;
+      }
 
       return this.files.getUploadURLExternal(options);
     }));
@@ -502,7 +519,7 @@ export class WebClient extends Methods {
     }
 
     // add multiple files data when file_uploads is supplied
-    if (options.file_uploads) {
+    if ('file_uploads' in options) {
       fileUploads = fileUploads.concat(await getMultipleFileUploadJobs(options, this.logger));
     }
     return fileUploads;
@@ -511,14 +528,14 @@ export class WebClient extends Methods {
   /**
    * Low-level function to make a single API request. handles queuing, retries, and http-level errors
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private async makeRequest(url: string, body: any, headers: any = {}): Promise<AxiosResponse> {
+  private async makeRequest(
+    url: string,
+    body: Record<string, unknown>,
+    headers: Record<string, string> = {},
+  ): Promise<AxiosResponse> {
     // TODO: better input types - remove any
     const task = () => this.requestQueue.add(async () => {
       const requestURL = (url.startsWith('https' || 'http')) ? url : `${this.axios.getUri() + url}`;
-      this.logger.debug(`http request url: ${requestURL}`);
-      this.logger.debug(`http request body: ${JSON.stringify(redact(body))}`);
-      this.logger.debug(`http request headers: ${JSON.stringify(redact(headers))}`);
 
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -531,6 +548,29 @@ export class WebClient extends Methods {
         if (url.endsWith('admin.analytics.getFile')) {
           config.responseType = 'arraybuffer';
         }
+        // apps.event.authorizations.list will reject HTTP requests that send token in the body
+        // TODO: consider applying this change to all methods - though that will require thorough integration testing
+        if (url.endsWith('apps.event.authorizations.list')) {
+          // eslint-disable-next-line no-param-reassign
+          delete body.token;
+        }
+        this.logger.debug(`http request url: ${requestURL}`);
+        this.logger.debug(`http request body: ${JSON.stringify(redact(body))}`);
+        // compile all headers - some set by default under the hood by axios - that will be sent along
+        let allHeaders: Record<string, AxiosHeaderValue | undefined> = Object.keys(this.axios.defaults.headers)
+          .reduce((acc, cur) => {
+            if (!axiosHeaderPropsToIgnore.includes(cur)) {
+              acc[cur] = this.axios.defaults.headers[cur];
+            }
+            return acc;
+          }, {} as Record<string, AxiosHeaderValue | undefined>);
+
+        allHeaders = {
+          ...this.axios.defaults.headers.common,
+          ...allHeaders,
+          ...headers,
+        };
+        this.logger.debug(`http request headers: ${JSON.stringify(redact(allHeaders))}`);
         const response = await this.axios.post(url, body, config);
         this.logger.debug('http response received');
 
@@ -554,7 +594,7 @@ export class WebClient extends Methods {
             // resume the request queue and throw a non-abort error to signal a retry
             this.requestQueue.start();
             // TODO: We may want to have more detailed info such as team_id, params except tokens, and so on.
-            throw Error(`A rate limit was exceeded (url: ${url}, retry-after: ${retrySec})`);
+            throw new Error(`A rate limit was exceeded (url: ${url}, retry-after: ${retrySec})`);
           } else {
             // TODO: turn this into some CodedError
             throw new AbortError(new Error(`Retry header did not contain a valid timeout (url: ${url}, retry-after header: ${response.headers['retry-after']})`));
@@ -578,8 +618,8 @@ export class WebClient extends Methods {
         throw error;
       }
     });
-
-    return pRetry(task, this.retryConfig);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return pRetry(task, this.retryConfig) as Promise<AxiosResponse<any, any>>;
   }
 
   /**
@@ -867,8 +907,7 @@ export function buildThreadTsWarningMessage(method: string): string {
  * @param body
  * @returns
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function redact(body: any): any {
+function redact(body: Record<string, unknown>): Record<string, unknown> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const flattened = Object.entries(body).map<[string, any] | []>(([key, value]) => {
     // no value provided
@@ -893,8 +932,7 @@ function redact(body: any): any {
   });
 
   // return as object
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const initialValue: { [key: string]: any; } = {};
+  const initialValue: { [key: string]: unknown; } = {};
   return flattened.reduce(
     (accumulator, [key, value]) => {
       if (key !== undefined && value !== undefined) {

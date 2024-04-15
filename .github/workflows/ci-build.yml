@@ -11,9 +11,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
+      fail-fast: false
       matrix:
         node-version: [18.x, 20.x]
-        package: [packages/logger, packages/oauth, packages/rtm-api, packages/socket-mode, packages/types, packages/web-api, packages/webhook]
+        package:
+          - packages/cli-hooks
+          - packages/logger
+          - packages/oauth
+          - packages/rtm-api
+          - packages/socket-mode
+          - packages/types
+          - packages/web-api
+          - packages/webhook
     steps:
     - uses: actions/checkout@v3
     - name: Use Node.js ${{ matrix.node-version }}
@@ -30,7 +39,8 @@ jobs:
         case "$PWD" in
           */webhook) pushd ../types && npm i && popd && npm link ../types;;
           */web-api) pushd ../types && npm i && popd && npm link ../types && pushd ../logger && npm i && popd && npm link ../logger;;
-          # TODO: add oauth and socket-mode here once those packages have new major versions released
+          */oauth) pushd ../logger && npm i && popd && npm link ../logger && pushd ../web-api && npm i && popd && npm link ../web-api;;
+          # TODO: add socket-mode here once new major version released
           *) ;; # default
         esac
         npm test

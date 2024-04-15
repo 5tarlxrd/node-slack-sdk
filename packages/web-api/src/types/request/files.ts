@@ -1,6 +1,12 @@
 import type { Stream } from 'node:stream';
-import type { CursorPaginationEnabled, OptionalTeamAssignable, TokenOverridable, TraditionalPagingEnabled } from './common';
-import type { FilesGetUploadURLExternalResponse } from '../response';
+import type {
+  CursorPaginationEnabled,
+  OptionalTeamAssignable,
+  TokenOverridable,
+  TraditionalPagingEnabled,
+} from './common';
+import type { FilesGetUploadURLExternalResponse } from '../response/index';
+import type { ExcludeFromUnion } from '../helpers';
 
 interface FileArgument {
   /** @description Encoded file ID. */
@@ -142,14 +148,19 @@ export type FileUploadV2 = FileUpload & {
   snippet_type?: string;
 };
 
+interface FilesUploadV2ArgumentsMultipleFiles {
+  file_uploads: ExcludeFromUnion<FileUploadV2, 'channel_id' | 'channels' | 'initial_comment' | 'thread_ts'>[];
+}
+
 // https://slack.dev/node-slack-sdk/web-api#upload-a-file
-export type FilesUploadV2Arguments = FileUploadV2 & TokenOverridable & {
-  file_uploads?: Omit<FileUploadV2, 'channel_id' | 'channels' | 'initial_comment' | 'thread_ts'>[];
-};
+export type FilesUploadV2Arguments = TokenOverridable & (
+  | FileUploadV2
+  | (Omit<FileUploadV2, 'file' | 'content'> & FilesUploadV2ArgumentsMultipleFiles)
+);
 
 // Helper type intended for internal use in filesUploadV2 client method
 // Includes additional metadata required to complete a single file upload job
-export type FileUploadV2Job = FileUploadV2 &
+export type FileUploadV2Job = FileUploadV2 & TokenOverridable &
 Pick<FilesGetUploadURLExternalResponse, 'file_id' | 'upload_url' | 'error'> & {
   length?: number;
   data?: Buffer;

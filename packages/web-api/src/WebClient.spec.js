@@ -9,7 +9,6 @@ const { LogLevel } = require('./logger');
 const { addAppMetadata } = require('./instrument');
 const { rapidRetryPolicy } = require('./retry-policies');
 const { Methods } = require('./methods');
-const { CaptureConsole } = require('@aoberoi/capture-console');
 const nock = require('nock');
 const Busboy = require('busboy');
 const sinon = require('sinon');
@@ -61,24 +60,24 @@ describe('WebClient', function () {
   });
 
   describe('has an option to change the log output severity', function () {
+    let sandbox = null;
     beforeEach(function () {
-      this.capture = new CaptureConsole();
-      this.capture.startCapture();
+      sandbox = sinon.createSandbox();
+      sandbox.stub(console, 'debug');
+    });
+    afterEach(function () {
+      sandbox.restore();
     });
     it('outputs a debug log on initialization', function () {
       const debuggingClient = new WebClient(token, { logLevel: LogLevel.DEBUG });
-      const output = this.capture.getCapturedText();
+      const output = console.debug.getCalls()[0].args.join(' ');
       assert.isNotEmpty(output); // should have at least 1 log line, but not asserting since that is an implementation detail
-    });
-    afterEach(function () {
-      this.capture.stopCapture();
     });
   });
 
   describe('has a logger option', function () {
+    let sandbox = null;
     beforeEach(function () {
-      this.capture = new CaptureConsole();
-      this.capture.startCapture();
       this.logger = {
         debug: sinon.spy(),
         info: sinon.spy(),
@@ -87,20 +86,21 @@ describe('WebClient', function () {
         setLevel: sinon.spy(),
         setName: sinon.spy(),
       };
+      sandbox = sinon.createSandbox();
+      sandbox.stub(console, 'debug');
+    });
+    afterEach(function () {
+      sandbox.restore();
     });
     it('sends logs to a logger and not to stdout', function () {
       const debuggingClient = new WebClient(token, { logLevel: LogLevel.DEBUG, logger: this.logger });
       assert.isTrue(this.logger.debug.called);
-      const capturedOutput = this.capture.getCapturedText();
-      assert.isEmpty(capturedOutput);
+      assert.isEmpty(console.debug.getCalls());
     });
     it('never modifies the original logger', function () {
       new WebClient(token, { logger: this.logger });
       // Calling #setName of the given logger is destructive
       assert.isFalse(this.logger.setName.called);
-    });
-    afterEach(function () {
-      this.capture.stopCapture();
     });
   });
 
@@ -558,7 +558,6 @@ describe('WebClient', function () {
       });
     });
 
-    // TODO: Upgrading busboy to 1.x breaks these tests
     describe('when API arguments contain binary to upload', function () {
       beforeEach(function () {
         const self = this;
@@ -566,9 +565,9 @@ describe('WebClient', function () {
           .post(/api/)
           // rather than matching on the body, that nock cannot do for content-type multipart/form-data, we use the
           // response to signal that the body was correctly serialized
-          .reply(function (uri, requestBody, cb) {
+          .reply(function (_uri, requestBody, cb) {
             // busboy is a parser for for multipart/form-data bodies
-            const busboy = new Busboy({ headers: this.req.headers });
+            const busboy = Busboy({ headers: this.req.headers });
             // capture state about all the parts that are in the body
             const parts = { files: [], fields: [], errors: [] };
 
@@ -1289,6 +1288,39 @@ describe('WebClient', function () {
     });
   });
 
+  describe('apps.event.authorizations.list API', function () {
+    it('should not send the token in the body if token is passed as a method argument', function () {
+      const client = new WebClient();
+      const scope = nock('https://slack.com')
+        .post(/api/)
+        .reply(200, (_uri, body) => {
+          assert.notInclude(body, token);
+          console.log('body is', body);
+          return { ok: true }
+        });
+      return client.apps.event.authorizations.list({
+        token,
+      })
+        .then(() => {
+          scope.done();
+        });
+    });
+    it('should not send the token in the body if token passed as client constructor', function () {
+      const client = new WebClient(token);
+      const scope = nock('https://slack.com')
+        .post(/api/)
+        .reply(200, (_uri, body) => {
+          assert.notInclude(body, token);
+          return { ok: true }
+        });
+      return client.apps.event.authorizations.list({
+      })
+        .then(() => {
+          scope.done();
+        });
+    });
+  });
+
   describe('getAllFileUploads', () => {
     const client = new WebClient(token);
     it('adds a single file data to uploads with content supplied', async () => {
@@ -1413,8 +1445,13 @@ describe('WebClient', function () {
   });
 
   describe('fetchAllUploadURLExternal', () => {
-
-    const client = new WebClient(token);
+    let client;
+    beforeEach(() => {
+      client = new WebClient(token);
+    });
+    afterEach(() => {
+      client = null;
+    });
     it('makes calls to files.getUploadURLExternal for each fileUpload', async () => {
       const testFileUploads = [{
         channel_id: 'C1234',
@@ -1430,11 +1467,33 @@ describe('WebClient', function () {
       await client.fetchAllUploadURLExternal(testFileUploads);
       assert.isTrue(spy.calledOnce);
     });
+    it('honours overriden token provided as an argument', async () => {
+      const tokenOverride = 'overriden-token';
+      const testFileUploads = [{
+        channel_id: 'C1234',
+        filename: 'test-txt.txt',
+        initial_comment: 'Doo ba doo here is the: test-txt.txt',
+        title: 'Spaghetti test-txt.txt',
+        data: Buffer.from('Here is a txt file'),
+        length: 18,
+        token: tokenOverride,
+      }];
+
+      var spy = sinon.spy();
+      client.files.getUploadURLExternal = spy;
+      await client.fetchAllUploadURLExternal(testFileUploads);
+      assert.isTrue(spy.calledWith(sinon.match({ token: tokenOverride })), 'token override not passed through to underlying `files.getUploadURLExternal` API method');
+    });
   });
 
   describe('completeFileUploads', () => {
-    const client = new WebClient(token);
-
+    let client;
+    beforeEach(() => {
+      client = new WebClient(token);
+    });
+    afterEach(() => {
+      client = null;
+    });
     it('rejects with an error when missing required file id', async () => {
       const invalidTestFileUploadsToComplete = [{
         channel_id: 'C1234',
@@ -1447,7 +1506,7 @@ describe('WebClient', function () {
       // should reject because of missing file_id
       try {
         const res = await client.completeFileUploads(invalidTestFileUploadsToComplete);
-        assert.fail('Should haave errored but did not');
+        assert.fail('Should have errored but did not');
       } catch (err) {
         assert.equal(err.message, 'Missing required file id for file upload completion');
       }
@@ -1466,6 +1525,22 @@ describe('WebClient', function () {
       client.files.completeUploadExternal = spy;
       await client.completeFileUploads(testFileUploadsToComplete);
       assert.isTrue(spy.calledOnce);
+    });
+    it('honours overriden token provided as an argument', async () => {
+      const tokenOverride = 'overriden-token';
+      const testFileUploadsToComplete = [{
+        channel_id: 'C1234',
+        file_id: 'test',
+        filename: 'test-txt.txt',
+        initial_comment: 'Doo ba doo here is the: test-txt.txt',
+        title: 'Spaghetti test-txt.txt',
+        token: tokenOverride,
+      }];
+
+      var spy = sinon.spy();
+      client.files.completeUploadExternal = spy;
+      await client.completeFileUploads(testFileUploadsToComplete);
+      assert.isTrue(spy.calledWith(sinon.match({ token: tokenOverride })), 'token override not passed through to underlying `files.completeUploadExternal` API method');
     });
   });
   

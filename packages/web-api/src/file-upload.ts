@@ -2,15 +2,13 @@ import { readFileSync } from 'fs';
 import { Readable } from 'stream';
 import { Logger } from '@slack/logger';
 import { errorWithCode, ErrorCode } from './errors';
-import { FilesCompleteUploadExternalArguments, FilesUploadV2Arguments, FileUploadBinaryContents, FileUploadStringContents, FileUploadV2, FileUploadV2Job } from './types/request/files';
+import {
+  FilesCompleteUploadExternalArguments,
+  FilesUploadV2Arguments,
+  FileUploadV2,
+  FileUploadV2Job,
+} from './types/request/files';
 
-/**
- * Returns a fileUploadJob used to represent the of the file upload job and
- * required metadata.
- * @param options Options provided by user
- * @param channelId optional channel id to share file with, omitted, channel is private
- * @returns
-*/
 export async function getFileUploadJob(
   options: FilesUploadV2Arguments | FileUploadV2,
   logger: Logger,
@@ -38,16 +36,25 @@ export async function getFileUploadJob(
   if ('thread_ts' in options) {
     fileUploadJob.thread_ts = options.thread_ts;
   }
+  if ('token' in options) {
+    fileUploadJob.token = options.token;
+  }
   if ('content' in options) {
     return {
       content: options.content,
       ...fileUploadJob,
     };
   }
-  return {
-    file: options.file,
-    ...fileUploadJob,
-  };
+  if ('file' in options) {
+    return {
+      file: options.file,
+      ...fileUploadJob,
+    };
+  }
+  throw errorWithCode(
+    new Error('Either a file or content field is required for valid file upload. You must supply one'),
+    ErrorCode.FileUploadInvalidArgumentsError,
+  );
 }
 
 /**
@@ -79,7 +86,7 @@ export async function getMultipleFileUploadJobs(
   options: FilesUploadV2Arguments,
   logger: Logger,
 ): Promise<FileUploadV2Job[]> {
-  if (options.file_uploads) {
+  if ('file_uploads' in options) {
     // go through each file_upload and create a job for it
     return Promise.all(options.file_uploads.map((upload) => {
       // ensure no omitted properties included in files_upload entry
@@ -103,16 +110,25 @@ export async function getMultipleFileUploadJobs(
       if ('thread_ts' in options) {
         uploadJobArgs.thread_ts = options.thread_ts;
       }
+      if ('token' in options) {
+        uploadJobArgs.token = options.token;
+      }
       if ('content' in upload) {
         return getFileUploadJob({
-          content: (upload as FileUploadStringContents).content,
+          content: upload.content,
           ...uploadJobArgs,
         }, logger);
       }
-      return getFileUploadJob({
-        file: (upload as FileUploadBinaryContents).file,
-        ...uploadJobArgs,
-      }, logger);
+      if ('file' in upload) {
+        return getFileUploadJob({
+          file: upload.file,
+          ...uploadJobArgs,
+        }, logger);
+      }
+      throw errorWithCode(
+        new Error('Either a file or content field is required for valid file upload. You must supply one'),
+        ErrorCode.FileUploadInvalidArgumentsError,
+      );
     }));
   }
   throw new Error(buildFilesUploadMissingMessage());
@@ -216,6 +232,9 @@ Record<string, FilesCompleteUploadExternalArguments> {
         };
         if (thread_ts) {
           toComplete[compareString].thread_ts = upload.thread_ts;
+        }
+        if ('token' in upload) {
+          toComplete[compareString].token = upload.token;
         }
       } else {
         toComplete[compareString].files.push({

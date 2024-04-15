@@ -134,8 +134,8 @@ export class SocketModeClient extends EventEmitter {
 
   /**
    * Start a Socket Mode session app.
-   * It may take a few milliseconds before being connected.
-   * This method must be called before any messages can be sent or received.
+   * This method must be called before any messages can be sent or received,
+   * or to disconnect the client via the `disconnect` method.
    */
   public start(): Promise<AppsConnectionsOpenResponse> {
     this.logger.debug('Starting a Socket Mode client ...');
@@ -143,12 +143,12 @@ export class SocketModeClient extends EventEmitter {
     this.stateMachine.handle(Event.Start);
     // Return a promise that resolves with the connection information
     return new Promise((resolve, reject) => {
-      this.once(ConnectingState.Authenticated, (result) => {
+      this.once(State.Connected, (result) => {
         this.removeListener(State.Disconnected, reject);
         resolve(result);
       });
       this.once(State.Disconnected, (err) => {
-        this.removeListener(ConnectingState.Authenticated, resolve);
+        this.removeListener(State.Connected, resolve);
         reject(err);
       });
     });
@@ -202,15 +202,16 @@ export class SocketModeClient extends EventEmitter {
           .transitionTo(ConnectingState.Reconnecting).withCondition(this.reconnectingCondition.bind(this))
           .transitionTo(ConnectingState.Failed)
     .state(ConnectingState.Reconnecting)
-      .do(async () => {
-        // Trying to reconnect after waiting for a bit...
+      .do(() => new Promise((res, _rej) => {
         this.numOfConsecutiveReconnectionFailures += 1;
         const millisBeforeRetry = this.clientPingTimeoutMillis * this.numOfConsecutiveReconnectionFailures;
         this.logger.debug(`Before trying to reconnect, this client will wait for ${millisBeforeRetry} milliseconds`);
         setTimeout(() => {
-          this.emit(ConnectingState.Authenticating);
+          this.logger.debug('Resolving reconnecting state to continue with reconnect...');
+          res(true);
         }, millisBeforeRetry);
-      })
+      }))
+      .onSuccess().transitionTo(ConnectingState.Authenticating)
       .onFailure().transitionTo(ConnectingState.Failed)
     .state(ConnectingState.Authenticated)
       .onEnter(this.configureAuthenticatedWebSocket.bind(this))
@@ -433,7 +434,7 @@ export class SocketModeClient extends EventEmitter {
   private async retrieveWSSURL(): Promise<AppsConnectionsOpenResponse> {
     try {
       this.logger.debug('Going to retrieve a new WSS URL ...');
-      return await this.webClient.apps.connections.open();
+      return await this.webClient.apps.connections.open({});
     } catch (error) {
       this.logger.error(`Failed to retrieve a new WSS URL for reconnection (error: ${error})`);
       throw error;
@@ -511,42 +512,47 @@ export class SocketModeClient extends EventEmitter {
     };
 
     let websocket: WebSocket;
+    let socketId: string;
     if (this.websocket === undefined) {
       this.websocket = new WebSocket(url, options);
+      socketId = 'Primary';
       websocket = this.websocket;
     } else {
       // Set up secondary websocket
       // This is used when creating a new connection because the first is about to disconnect
       this.secondaryWebsocket = new WebSocket(url, options);
+      socketId = 'Secondary';
       websocket = this.secondaryWebsocket;
     }
 
     // Attach event listeners
     websocket.addEventListener('open', (event) => {
+      this.logger.debug(`${socketId} WebSocket open event received (connection established)`);
       this.stateMachine.handle(Event.WebSocketOpen, event);
     });
-    websocket.addEventListener('close', (event) => {
-      this.stateMachine.handle(Event.WebSocketClose, event);
-    });
     websocket.addEventListener('error', (event) => {
-      this.logger.error(`A WebSocket error occurred: ${event.message}`);
+      this.logger.error(`${socketId} WebSocket error occurred: ${event.message}`);
       this.emit('error', websocketErrorWithOriginal(event.error));
     });
-    websocket.addEventListener('message', this.onWebSocketMessage.bind(this));
+    websocket.on('message', this.onWebSocketMessage.bind(this));
+    websocket.on('close', (code: number, _data: Buffer) => {
+      this.logger.debug(`${socketId} WebSocket close event received (code: ${code}, reason: ${_data.toString()})`);
+      this.stateMachine.handle(Event.WebSocketClose, code);
+    });
 
     // Confirm WebSocket connection is still active
-    websocket.addEventListener('ping', ((data: Buffer) => {
+    websocket.on('ping', ((data: Buffer) => {
       if (this.pingPongLoggingEnabled) {
-        this.logger.debug(`Received ping from Slack server (data: ${data})`);
+        this.logger.debug(`${socketId} WebSocket received ping from Slack server (data: ${data})`);
       }
       this.startMonitoringPingFromSlack();
       // Since the `addEventListener` method does not accept listener with data arg in TypeScript,
       // we cast this function to any as a workaround
     }) as any); // eslint-disable-line @typescript-eslint/no-explicit-any
 
-    websocket.addEventListener('pong', ((data: Buffer) => {
+    websocket.on('pong', ((data: Buffer) => {
       if (this.pingPongLoggingEnabled) {
-        this.logger.debug(`Received pong from Slack server (data: ${data})`);
+        this.logger.debug(`${socketId} WebSocket received pong from Slack server (data: ${data})`);
       }
       this.lastPongReceivedTimestamp = new Date().getTime();
       // Since the `addEventListener` method does not accept listener with data arg in TypeScript,
@@ -694,8 +700,12 @@ export class SocketModeClient extends EventEmitter {
    * `onmessage` handler for the client's WebSocket.
    * This will parse the payload and dispatch the relevant events for each incoming message.
    */
-  protected async onWebSocketMessage({ data }: { data: string }): Promise<void> {
-    this.logger.debug(`Received a message on the WebSocket: ${data}`);
+  protected async onWebSocketMessage(data: WebSocket.RawData, isBinary: boolean): Promise<void> {
+    if (isBinary) {
+      this.logger.debug('Unexpected binary message received, ignoring.');
+      return;
+    }
+    this.logger.debug(`Received a message on the WebSocket: ${data.toString()}`);
 
     // Parse message into slack event
     let event: {
@@ -710,12 +720,12 @@ export class SocketModeClient extends EventEmitter {
     };
 
     try {
-      event = JSON.parse(data);
+      event = JSON.parse(data.toString());
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (parseError: any) {
       // Prevent application from crashing on a bad message, but log an error to bring attention
-      this.logger.error(
-        `Unable to parse an incoming WebSocket message: ${parseError.message}`,
+      this.logger.debug(
+        `Unable to parse an incoming WebSocket message (will ignore): ${parseError.message}, ${data.toString()}`,
       );
       return;
     }

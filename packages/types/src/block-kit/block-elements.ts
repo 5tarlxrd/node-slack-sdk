@@ -1,6 +1,13 @@
 // This file contains objects documented here: https://api.slack.com/reference/block-kit/block-elements
 
-import { Actionable, Confirmable, Dispatchable, Focusable, Placeholdable, RichTextStyleable } from './extensions';
+import {
+  Actionable,
+  Confirmable,
+  Dispatchable,
+  Focusable,
+  Placeholdable,
+  RichTextStyleable,
+} from './extensions';
 import { Option, PlainTextElement, PlainTextOption } from './composition-objects';
 import { RichTextBlock } from './blocks';
 
@@ -944,6 +951,11 @@ export interface RichTextQuote {
    * @description An array of {@link RichTextElement} comprising the quote block.
    */
   elements: RichTextElement[];
+  /**
+   * @description Whether to render a quote-block-like border on the inline side of the text quote.
+   * `0` renders no border, while `1` renders a border. Defaults to `0`.
+   */
+  border?: 0 | 1;
 }
 
 /**
